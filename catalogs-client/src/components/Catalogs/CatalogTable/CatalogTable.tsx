@@ -11,7 +11,6 @@ import { CatalogModal } from "../CatalogModal/CatalogModal";
 import { useCatalogs } from "../../../hooks/useCatalogs";
 import { StyledCatalogTable } from "./CatalogTable.styles";
 import { dataGridColumns, dataGridInitialState } from "./CatalogTableConfig";
-import { toast } from "react-toastify";
 import notify from "../../../utils/toast";
 
 export const CatalogTable: React.FC = () => {
@@ -34,7 +33,6 @@ export const CatalogTable: React.FC = () => {
     editCatalog,
     removeCatalog,
     removeMultipleCatalogs,
-    refetchCatalogs,
   } = useCatalogs(paginationModel.page + 1, paginationModel.pageSize);
 
   const handlePaginationChange = (newModel: GridPaginationModel) => {
@@ -58,14 +56,12 @@ export const CatalogTable: React.FC = () => {
     try {
       if (selectedCatalog) {
         await editCatalog.mutateAsync({ id: selectedCatalog._id, catalog });
-        notify.success("Catalog updated successfully!");
       } else {
         await addCatalog.mutateAsync(catalog);
-        notify.success("Catalog created successfully!");
       }
       setModalOpen(false);
     } catch (error) {
-      toast.error("Error saving catalog. Please try again.");
+      throw new Error(`Error saving catalog.`)
     }
   };
 
@@ -75,7 +71,7 @@ export const CatalogTable: React.FC = () => {
       notify.success("Catalog deleted successfully!");
       setSelectedCatalog(null);
     } catch (error) {
-      toast.error("Error deleting catalog. Please try again.");
+      throw new Error(`Error deleted catalog.`)
     }
   };
 
@@ -86,7 +82,7 @@ export const CatalogTable: React.FC = () => {
       notify.success("Selected catalogs deleted successfully!");
       setSelectionModel([]);
     } catch (error) {
-      toast.error("Error deleting selected catalogs. Please try again.");
+      throw new Error(`Error deleting selected catalogs.`)
     }
   };
 

@@ -33,31 +33,57 @@ export const useCatalogs = (page: number, limit: number) => {
         throw new Error(`Failed to fetch catalogs: ${error}`);
       }
     },
-    retry: 0,
+    retry: 3,
+    retryDelay: 5000,
     refetchOnWindowFocus: false,
     placeholderData: keepPreviousData,
   });
 
   const addCatalog = useMutation({
-    mutationFn: (catalog: Omit<CatalogInterface, "id" | "indexedAt">) =>
-      createCatalog(catalog),
+    mutationFn: async (catalog: Omit<CatalogInterface, "id" | "indexedAt">) => {
+      try {
+        return await createCatalog(catalog);
+      } catch (error) {
+        throw error;
+      }
+    },
+    retry: 3,
+    retryDelay: (attempt) => {
+      notify.error(`Retrying to create catalog... Attempt ${attempt + 1}`);
+      return 1000 * attempt;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["catalogs"] });
+      notify.success("Catalog created successfully!");
     },
     onError: (error: Error) => {
+      notify.error("Failed to create catalog after multiple retries.");
       throw new Error(`Error creating catalog: ${error.message}`);
     },
   });
 
   const editCatalog = useMutation({
-    mutationFn: (idAndCatalog: {
+    mutationFn: async (idAndCatalog: {
       id: string;
       catalog: Partial<CatalogInterface>;
-    }) => updateCatalog(idAndCatalog.id, idAndCatalog.catalog),
+    }) => {
+      try {
+        return await updateCatalog(idAndCatalog.id, idAndCatalog.catalog);
+      } catch (error) {
+        throw error;
+      }
+    },
+    retry: 3,
+    retryDelay: (attempt) => {
+      notify.error(`Retrying to update catalog... Attempt ${attempt + 1}`);
+      return 1000 * attempt;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["catalogs"] });
+      notify.success("Catalog updated successfully!");
     },
     onError: (error: Error) => {
+      notify.error("Failed to update catalog after multiple retries.");
       throw new Error(`Error updating catalog: ${error.message}`);
     },
   });
@@ -78,7 +104,8 @@ export const useCatalogs = (page: number, limit: number) => {
       queryClient.invalidateQueries({ queryKey: ["catalogs"] });
     },
     onError: (error: Error) => {
-      throw new Error(`Error deleting multiple catalogs: ${error.message}`);
+      notify.error("Error deleting selected catalogs. Please try again.");
+      throw new Error(`${error.message}`);
     },
   });
 
@@ -86,7 +113,6 @@ export const useCatalogs = (page: number, limit: number) => {
     catalogs: paginatedData.data,
     total: paginatedData.total,
     isFetchingCatalogs,
-    refetchCatalogs,
     fetchError,
     addCatalog,
     editCatalog,

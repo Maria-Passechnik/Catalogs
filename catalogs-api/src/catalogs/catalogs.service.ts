@@ -10,12 +10,44 @@ import { CreateCatalogDto } from './dtos/create-catalog.dto';
 import { UpdateCatalogDto } from './dtos/update-catalog.dto';
 import { logger } from 'src/config/logger.config';
 import { performBatchBulkWrite } from 'src/common/utils/bulk-operation.util';
+import { Cron } from '@nestjs/schedule';
 
 @Injectable()
 export class CatalogsService {
   constructor(
     @InjectModel(Catalog.name) private readonly catalogModel: Model<Catalog>,
   ) {}
+
+  @Cron('0 0 * * *') // Runs at midnight every day
+  async handleAutomaticIndexing() {
+    try {
+      logger.info('Starting automatic indexing process for all catalogs...');
+      const currentTimestamp = new Date();
+
+      const result = await this.catalogModel.updateMany(
+        { locked: { $ne: true } },
+        {
+          $set: { indexedAt: currentTimestamp, locked: true },
+          $inc: { version: 1 },
+        },
+      );
+
+      logger.info(
+        `Automatic indexing completed: ${result.modifiedCount} catalogs updated.`,
+      );
+
+      await this.catalogModel.updateMany(
+        { locked: true },
+        { $set: { locked: false } },
+      );
+      logger.info('Unlocked all catalogs after indexing.');
+    } catch (error) {
+      logger.error('Failed to complete automatic indexing process.');
+      throw new BadRequestException(
+        'Failed to complete automatic indexing process.',
+      );
+    }
+  }
 
   async getAll(page: number, limit: number) {
     try {
@@ -54,32 +86,48 @@ export class CatalogsService {
 
   async update(id: string, updateCatalogDto: UpdateCatalogDto) {
     try {
+      const locked = await this.lockDocument(id);
+      if (!locked) {
+        throw new BadRequestException('Catalog is already locked or not found');
+      }
+
       const existingCatalog = await this.catalogModel.findById(id);
       if (!existingCatalog) {
         throw new NotFoundException(`Catalog with ID ${id} not found`);
       }
 
       if (updateCatalogDto.isPrimary) {
-        await this.handleIsPrimaryUpdate(existingCatalog.vertical);
-        logger.info('Catalogs isPrimary updated successfully');
+        try {
+          await this.handleIsPrimaryUpdate(existingCatalog.vertical);
+          logger.info('Catalogs isPrimary updated successfully');
+        } catch (error) {
+          throw new Error(`Failed to update primary`);
+        }
       }
 
       updateCatalogDto.indexedAt = new Date();
 
-      const updatedCatalog = await this.catalogModel.findByIdAndUpdate(
-        id,
-        updateCatalogDto,
-        {
-          new: true,
-        },
+      const updatedCatalog = await this.catalogModel.findOneAndUpdate(
+        { _id: id, version: existingCatalog.version },
+        { ...updateCatalogDto, $inc: { version: 1 } },
+        { new: true },
       );
-      logger.info('Catalogs updated successfully');
+
+      if (!updatedCatalog) {
+        throw new BadRequestException(
+          'Failed to update catalog due to version mismatch',
+        );
+      }
+
+      logger.info('Catalog updated successfully');
       return updatedCatalog;
     } catch (error) {
-      logger.error('Failed to update catalog');
+      logger.error('Failed to update catalog', error.message);
       throw new BadRequestException(
         'Failed to update catalog: ' + error.message,
       );
+    } finally {
+      await this.unlockDocument(id);
     }
   }
 
@@ -116,20 +164,56 @@ export class CatalogsService {
     }
   }
 
-  private async handleIsPrimaryUpdate(vertical: string) {
-    const operations = await this.catalogModel
-      .find({ vertical, isPrimary: true })
-      .then((documents) =>
-        documents.map((doc) => ({
-          updateOne: {
-            filter: { _id: doc._id },
-            update: { $set: { isPrimary: false, indexedAt: new Date() } },
-          },
-        })),
-      );
+  async unlockDocument(id: string): Promise<void> {
+    await this.catalogModel.updateOne(
+      { _id: id, locked: true },
+      { $set: { locked: false } },
+    );
+  }
 
-    if (operations.length) {
-      await performBatchBulkWrite(this.catalogModel, operations);
+  async lockDocument(id: string): Promise<boolean> {
+    const result = await this.catalogModel.findOneAndUpdate(
+      { _id: id, locked: { $ne: true } },
+      { $set: { locked: true } },
+      { new: true },
+    );
+
+    return !!result;
+  }
+
+  private async handleIsPrimaryUpdate(vertical: string) {
+    const documents = await this.catalogModel.find({
+      vertical,
+      isPrimary: true,
+    });
+
+    if (!documents.length) {
+      logger.info(`No primary catalogs found for vertical: ${vertical}`);
+      return;
     }
+
+    const operations = documents.map((doc) => ({
+      updateOne: {
+        filter: { _id: doc._id, locked: { $ne: true }, version: doc.version },
+        update: {
+          $set: { isPrimary: false, indexedAt: new Date(), locked: true },
+          $inc: { version: 1 },
+        },
+      },
+    }));
+
+    await performBatchBulkWrite(this.catalogModel, operations);
+
+    const ids = documents.map((doc) => doc._id);
+    await this.catalogModel.updateMany(
+      { _id: { $in: ids }, locked: true },
+      { $set: { locked: false } },
+    );
+
+    logger.info(`Updated primary catalogs for vertical: ${vertical}`);
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

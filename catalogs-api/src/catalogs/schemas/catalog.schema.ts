@@ -38,6 +38,19 @@ export class Catalog {
     default: null,
   })
   indexedAt: Date;
+
+  @Prop({
+    type: Number,
+    default: 0,
+  })
+  version: number;
+
+  @Prop({
+    type: Boolean,
+    default: false,
+  })
+  locked: boolean;
+  
 }
 
 export const CatalogSchema = SchemaFactory.createForClass(Catalog);
